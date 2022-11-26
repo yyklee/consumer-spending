@@ -1,0 +1,371 @@
+---
+title: "Finding trends and patterns in consumer spending"
+author: 'Author: Younkyung Lee'
+output:
+  html_document:
+    theme: paper
+    highlight: pygments
+    toc: yes
+    toc_float: yes
+    code_download: yes
+    fig_caption: no
+  word_document:
+    toc: yes
+  pdf_document:
+    toc: yes
+editor_options:
+  chunk_output_type: console
+---
+
+**Objective:** The main purpose of this analysis is to find spending patterns across prominent consumer markets using Consumer Expenditure Survey data from the National Bureau of Economic Research (<http://www.nber.org/data/ces_cbo.html>). I am assuming that the client is interested in the broad patterns of the consumer markets.
+
+**About the Data:** The Consumer Expenditure Surveys (CE) provides data on expenditures, income, and demographic characteristics of consumers in the United States. The survey is self-administered, and each consumer unit keeps a diary for two one-week periods. This survey is meant to capture small, frequently purchased items and allows respondents to record all purchases such as spending for food and beverages, tobacco, personal care products, and nonprescription drugs and supplies. This survey is also designed to be representative of the entire U.S. civilian non-institutionalized population, and includes both urban and rural areas.
+
+**Questions:** In this analysis, I am going to focus on the demographics of the respondent, the size of the respondent's household, the income of the respondent , and total expenditures on food (fruits, vegetable, groceries), alcohol and non-alcohol beverages. The specific questions will be answered below.
+
+## Step 0: Set working directory and install packages.
+
+```{r load-packages, include=FALSE}
+library(dplyr)
+library(magrittr)
+library(knitr)
+
+# Load packages for data handling
+library(dplyr)
+library(plyr)
+library(tidyverse)
+
+# To explore descriptive statistics
+library(stats)
+library(fpc)
+library(cluster)
+
+# To visualize data
+library(ggplot2)
+
+# to compile pdf
+library(tinytex)
+
+```
+
+
+## Step 1: Load data
+
+First, import the zip file data set from the Bureau of Labor Statistics (BLS) web page into a data frame:
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE}
+#import consumer expenditure data
+download.file("https://www.bls.gov/cex/pumd/data/comma/diary21.zip", "diary21.zip")
+
+diary_df <- list("diary21/fmld211.csv",
+             "diary21/fmld212.csv",
+             "diary21/fmld213.csv",
+             "diary21/fmld214.csv") %>% 
+  map_dfr(~read_csv(unz("diary21.zip", .x)) %>% 
+            mutate_all(as.character))
+
+```
+
+The main data frame has 381 columns and 12067 observations.
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+#glimpse at data
+dim(diary_df)
+```
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+#glimpse at data
+head(diary_df)
+```
+
+As we do not have any information of the variable names, let's import the dictionary data set:
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+dict<-read_csv('dictionary.csv', show_col_types = FALSE)
+```
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+#glimpse at data
+head(dict)
+```
+
+To easily search for the meaning of the variable, I made a function that returns the meaning.
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+
+#function to easily match variable names to the details.
+find_var_mean <- function(dict, varname) {
+  meaning<- head(dict[dict['VarName'] == varname,],1)
+  return(meaning)
+}
+
+# e.g. to find the description of AGE 
+find_var_mean(dict, 'AGE')
+
+# e.g. to find the description of FOODTOT
+find_var_mean(dict, 'FOODTOT')
+
+```
+
+Using the function above, I want to extract the data that I need. As mentioned above, I aim to focus on:
+
+**Demographic:** age, sex, region, the size of the respondent's household, age of children, the number of children in the household under the age of 15, the income of the respondent.
+
+**Spending:** total expenditures on food, alcohol/non-alcoholic beverages, bakery products, beef, pork, poulty, cereal, housekeeping supplies and services.
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+#demographic
+demo_df<-diary_df[,c('NEWID','AGE_REF','INC_RNKM','BLS_URBN', 'EDUC_REF','FAM_SIZE','CHILDAGE','FAM_TYPE')]
+
+head(demo_df)
+```
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+spending_df<-diary_df[,c('NEWID', 'FOODTOT','FOODAWAY','FOODHOME','ALCBEV','NONALBEV', 'BAKEPROD','BEEF', 'EGGS', 'FRSHFRUT','FRSHVEG','DRUGSUPP', 'HOUSKEEP', 'PORK','POULTRY')]
+
+head(spending_df)
+```
+
+## Step 2: Clean Data
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+#a look at demographic variables.
+
+output <- summary(demo_df)
+print(output)
+
+```
+
+All of the columns in demo_df are characters. We need to change some of the variables to integers.
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+# to integer
+
+demo_df$AGE_REF<-as.integer(demo_df$AGE_REF)
+demo_df$FAM_SIZE<-as.integer(demo_df$FAM_SIZE)
+demo_df$CHILDAGE<-as.integer(demo_df$CHILDAGE)
+demo_df$EDUC_REF<-as.integer(demo_df$EDUC_REF)
+demo_df$EDUC_REF<-as.integer(demo_df$INC_RNKM)
+
+```
+
+Take a look at the demo_df again. We can see that the average family size is 2.34, the average years of education is about 14. The respondent's age range from 16 to 87, with an average of 53.
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+#a look at demographic variables.
+
+output <- summary(demo_df)
+head(output)
+
+```
+
+
+Similarly, the datatype of spending_df needs some change.
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+#a look at spending data
+
+output <- summary(spending_df)
+print(output)
+
+```
+
+Similarly, all of the columns in demo_df are characters. We need to change some of the variables to integers.
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+# to integer
+
+spending_df[,2:15] <- sapply(spending_df[,2:15], as.integer)
+
+```
+
+Check if it has changed correctly. We can see the average weekly expenditure for each categories.
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+# check again
+
+output <- summary(spending_df)
+print(output)
+
+```
+
+Let's merge the two data sets.
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+#merge data
+
+merged_df<-merge(demo_df, spending_df, by.x = "NEWID")
+
+head(merged_df)
+```
+
+Lastly, look for missing of duplicate variables.
+
+Identify duplicate rows.
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+merged_df[duplicated(merged_df), ]
+```
+
+Seems like there is no duplicates.
+
+Now let's identify the missing variables.
+
+```{r, warning=FALSE, comment=NA, eval = FALSE, message=FALSE, echo=TRUE, cache=TRUE}
+# replace missing value(99) with NA
+
+merged_df %>% replace_with_na(replace = list(x = c(99, '99')))
+
+output <- summary(merged_df)
+print(output)
+
+```
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+p <- function(x) {sum(is.na(x))/length(x)*100}
+apply(merged_df, 2, p)
+```
+
+There is no missing value. 
+
+## Question 1: Dine Out vs Eating from home
+
+First, I am going to explore the general trends of dining patterns. For instance, do US citizens spend more money for eating out or eating from home? Does this rate differ by cities compared to rural areas?
+
+Let's explore the total expenditure spent on food and how the amount differs for each category (dining out vs eating from home).
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+
+summary(merged_df[c('FOODTOT','FOODAWAY','FOODHOME')])
+
+```
+
+From the average value, we can see that people spend more money for eating at home. Remember this survey was conducting during COVID. To get a better picture, we should see the distribution of the data. 
+
+However, before moving on get rid of the outliers.
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+merged_df_cut<-merged_df[(merged_df['FOODTOT']<212) & (merged_df['FOODTOT']>46),]
+```
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+
+df_dine <- merged_df_cut %>% gather(key = FOOD, value = Value, FOODAWAY:FOODHOME)
+
+# Find the mean of each group
+library(plyr)
+cdat <- ddply(df_dine, "FOOD", summarise, value.mean=mean(Value))
+
+# Density plots with means
+ggplot(df_dine, aes(x=Value, fill = FOOD,colour=FOOD)) +
+    geom_density(size = 1.4, alpha =0.1) +
+    geom_vline(data=cdat, aes(xintercept=value.mean,  colour=FOOD),
+               linetype="dashed", size= 1) +
+    ggtitle('Expenditure on Food at Home vs Away from Home') +
+    xlab('Weekly Expenditure($)') +
+    ylab('Density') +
+    scale_fill_brewer(palette = "Dark2") +
+    theme_bw() +
+    scale_fill_hue()
+```
+
+The average weekly expenditure for food is \$152. People spend more in buying food for eating at home(\$101) vs away (\$51). Because this is data from 2021 and during COVID, it would be interesting to compare this data to the patterns of 2019.
+
+## Question 2: Urban-Rural Differences in food consumption
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+#plot dining in vs out in cities and rural areas
+
+ggplot(df_dine, aes(x= BLS_URBN, y=Value, fill=FOOD)) + 
+    geom_boxplot() +
+    ggtitle("") + xlab("") +ylab("") + 
+    scale_x_discrete(name ="Urbanization", labels=c("Urban", "Rural")) +
+    scale_fill_discrete(name = "Dining Location", labels = c("Home", "Restaurant")) +
+    theme_bw()
+
+```
+
+From the box plot, we can see how people living in urban and rural areas spend more money eating at home. However, some city-dwellers seem to spend much higher than average on dining out, driving the average (sightly) higher.
+
+
+## Question 3: Income Range and Fresh Food
+
+Next, let's find out whether people who earn more income spend more money in fresh food (such as fresh vegetables, fresh fruits) vs others (eggs)? 
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+ff_df<-merged_df[, c('INC_RNKM','FOODTOT', 'EGGS', 'FRSHFRUT','FRSHVEG')]
+ff_df$INC_RNKM<-as.integer(ff_df$INC_RNKM)
+```
+
+For simplicity
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+
+# correlation matrix
+cor(ff_df)
+
+# plot the data
+library(PerformanceAnalytics)
+chart.Correlation(ff_df)
+```
+
+Interestingly, income has a positive correlation with money spent on fresh vegetables and fresh fruits. However, earning more income does not mean they spend more money on eggs. 
+
+Similarly, there is no direct link between income and expenditure on meat
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+
+ff_df<-merged_df[, c('INC_RNKM', 'BEEF', 'POULTRY','PORK')]
+ff_df$INC_RNKM<-as.integer(ff_df$INC_RNKM)
+
+# correlation matrix
+cor(ff_df)
+
+# plot the data
+library(PerformanceAnalytics)
+chart.Correlation(ff_df)
+```
+
+
+## Question 4: Alcohol and Healthy Behavior
+
+Lastly, 
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+df_bev <- merged_df %>% gather(key = "BEV", value = Value, ALCBEV:NONALBEV)
+df_bev<-df_bev[(df_bev['Value']<100) &(df_bev['Value']>0),]
+```
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+
+# Find the mean of each group
+library(plyr)
+cdat <- ddply(df_bev, "BEV", summarise, value.mean=mean(Value))
+
+# Density plots with means
+ggplot(df_bev, aes(x=Value, fill = BEV, colour= BEV)) +
+    geom_density(size = 1.4, alpha =0.1) +
+    geom_vline(data=cdat, aes(xintercept=value.mean,  colour= BEV),
+               linetype="dashed", size= 1) +
+    ggtitle('Expenditure on Alcoholic and Nonalcoholic beverages') +
+    xlab('Weekly Expenditure($)') +
+    ylab('Density') +
+    scale_fill_brewer(palette = "Dark2") +
+    theme_bw() +
+    scale_fill_hue()
+```
+
+```{r, warning=FALSE, comment=NA, message=FALSE, echo=TRUE, cache=TRUE}
+
+health_df<-merged_df[, c('INC_RNKM','ALCBEV', 'NONALBEV','FRSHFRUT','FRSHVEG')]
+health_df$INC_RNKM<-as.integer(health_df$INC_RNKM)
+
+# correlation matrix
+cor(health_df)
+
+# plot the data
+chart.Correlation(health_df)
+```
+
+## Conclusion and Discussion
+
+This report provides a brief analysis of spending patterns across specific food and beverage categories using Consumer Expenditure Survey data from the National Bureau of Economic Research. Based on the findings above, the analysis can be further expanded by incorporating longitudinal data and price-index data.
